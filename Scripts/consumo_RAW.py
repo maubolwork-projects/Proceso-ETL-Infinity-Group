@@ -1,4 +1,4 @@
-#Esta es la Versión 1.5 del código que pretende ser un proceso ETL el cual extrae datos 
+#Esta es la Versión 1.0 del código que pretende ser un proceso ETL el cual extrae datos 
 #de diferentes fuentes (en este caso Excel), los procesa, detecta, audita cambios y los carga
 # a una base de datos en PostgreSQL. El código es modular, con funciones específicas para cada etapa del proceso.
 
@@ -7,17 +7,16 @@ import pandas as pd
 import numpy as np
 import hashlib
 from sqlalchemy import create_engine
-import datetime
 
 engine = create_engine("postgresql://postgres:postgres@localhost:5432/raw_prueba")
-with engine.connect() as conn:
-    print("Conexión exitosa")
+#with engine.connect() as conn:
+#    print("Conexión exitosa")
 
 def export_to_raw(df, table_name, exist):
     #Esta función toma un dataframe y un nombre de tabla,
     #y lo exporta a una base en PostgreSQL llamada "raw_prueba" utilizando SQLAlchemy
     df.to_sql(name=table_name, con=engine, if_exists=exist, index=False)
-    return print(f"Datos exportados a la tabla {table_name} en la base raw_prueba")
+    print(f"Datos exportados a la tabla {table_name} en la base raw_prueba")
 
 def status_test(df1, df2, key_columns):
     #Esta funcion toma el df de la base RAW y el df de produccion y los columnas a comparar,
@@ -85,7 +84,7 @@ Sources = {
 }
 execution_date = datetime.datetime.now()
 
-def process_function(source):
+def process_source(source):
     #Esta funcion toma de un diccionario la informacion con cada fuente de informacion
     #procesa los datos de cada fuente utilizando las funciones anteriores, devuelve un df resumen
     #carga los datos sin cambios o errores a raw y los datos con cambios o eliminados a la tabla de auditoria
@@ -95,35 +94,18 @@ def process_function(source):
     df_source_raw = pd.read_sql_table(source["table_name"], con=engine)
     df_status, summary_status = status_test(df_source_raw, df_source, source["key_columns"])
     df_auditoria = auditory(df_status, source["table_name"])
-    df_new_records = get_new_records(df_status, source["table_name"])
+    df_new_records = get_new_records(df_status, df_source, source["table_name"])
     return summary_status
 
 def main():
 
-#Extraccion de datos 
-    ruta1 = "C:\\Users\\HP\\Documents\\concretera_muestras\\ventas_departamento_100_ciudades_fixed.xlsx"
-    #ruta2 = "C:\\Users\\HP\\Documents\\concretera_muestras\\produccion_departamento_100_ciudades_fixed.xlsx"
-    df_ventas = get_source_excel(ruta1)
+    #Esta es la función principal que ejecuta el proceso ETL para cada fuente de información almacenada en Sources
+    #En este ejemplo extrae los datos de dos fuentes de excel (ventas y producción), agrega un hash unico para cada
+    #registro; a partrir de ahí compara los datos almacenados en la base de datos RAW y los extraidos de las otras 
+    #fuentes; detecta cambios, nuevos registros y eliminados, almacena los datos nuevos en una tabla de la base RAW
+    #los cambios en una tabla de auditoria y un resumen con la cantidad de estados detectados en otra tabla.
 
-#Agrega la columna de key y hash a ambos dataframes
-    df_ventas = add_hash(df_ventas, ["RegistroID", "Fecha", "Material", "Cantidad", "PrecioUnitario", "Total"])
-    df_ventas = df_ventas.where(pd.notnull(df_ventas), None)
-    df_produccion = add_hash(df_produccion, ["RegistroID", "Fecha", "Material", "Cantidad", "PrecioUnitario", "Total","Sucursal"])
-    df_produccion = df_produccion.where(pd.notnull(df_produccion), None)
-    #print(df_ventas.head())
-
-#Exportar datos obtenidos de las fuentes en excel sin cambios a la base RAW en postgreSQL
-    export_to_raw(df_ventas, "ventas_departamento_100_ciudades")
-    export_to_raw(df_produccion, "produccion_departamento_100_ciudades")
-
-#Importar datos desde la base RAW en postgreSQL 
-    df_ventas_raw = pd.read_sql_table("ventas_departamento_100_ciudades", con=engine)
-    df_produccion_raw = pd.read_sql_table("produccion_departamento_100_ciudades", con=engine)
-
-#Crea un marge para comparar los id y hash de ambos dataframes para detectar cambios, nuevos registros o registros eliminados
-#almecena los cambios detectados en un nuevo dataframe de auditoria con la fecha actual y lo envia a raw para su almacenamiento
-    df_status = status_test(df_ventas_raw, df_ventas, ["RegistroID", "Hash"])
-    df_auditoria = auditory(df_status)
-    print(df_auditoria)
+    proceso_ventas = process_source(Sources["ventas"])
+    
 if __name__ == "__main__":
     main()
