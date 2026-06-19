@@ -1,22 +1,47 @@
 #Esta es la Versión 1.0 del código que pretende ser un proceso ETL el cual extrae datos 
-#de diferentes fuentes (en este caso Excel), los procesa, detecta, audita cambios y los carga
+#de diferentes fuentes (en este caso Excel): comprueba la validez del archivo (vacio, faltantes, duplicados) y,
+#detiene el proceso si no es valido; procesa los datos y asigna un hash a cada fila, audita cambios, eliminados
+#y nuevos, reporta los cambios en una tabla y aisla las filas con cambios en otra (auditoria), los nuevos los carga
 # a una base de datos en PostgreSQL. El código es modular, con funciones específicas para cada etapa del proceso.
 
 import datetime
 import pandas as pd
 import numpy as np
 import hashlib
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect
 
 engine = create_engine("postgresql://postgres:postgres@localhost:5432/raw_prueba")
-#with engine.connect() as conn:
-#    print("Conexión exitosa")
 
-def export_to_raw(df, table_name, exist):
+def export_to_raw(df, table_name):
     #Esta función toma un dataframe y un nombre de tabla,
     #y lo exporta a una base en PostgreSQL llamada "raw_prueba" utilizando SQLAlchemy
-    df.to_sql(name=table_name, con=engine, if_exists=exist, index=False)
-    print(f"Datos exportados a la tabla {table_name} en la base raw_prueba")
+    df.to_sql(name=table_name, con=engine, if_exists="append", index=False) 
+
+def validate_source(df, columns):
+     #Esta función valida si la fuente de datos en excel es valida, esto quiere 
+     #decir que no tiene los siguientes errores: a) el archivo está completamente
+     #vacio. b) Tiene estructura (Columnas) pero no tiene datos. c) Tiene algunas
+     #columnas eliminadas
+
+     if len(df.columns) == 0:
+          raise ValueError("Archivo vacío : no contiene columnas")
+     
+     if df.empty:
+          raise ValueError(f"Advertencia : Archivo sin registros en las columnas : {columns}")
+
+     missing_columns = [col for col in columns
+                        if col not in df.columns]
+     
+     if missing_columns:
+          raise ValueError(f"Columnas faltantes : {missing_columns}")
+     
+     return True
+    
+def validate_duplicated(df, ID_Column):
+     #Esta función detecta si hay valores duplicados y detiene la ejecución si los hay
+     duplicados = df[df.duplicated(subset=[ID_Column[0]], keep=False)]
+     if not duplicados.empty:
+          raise ValueError(f"Tabla con valores duplicados en : {duplicados[ID_Column[0]].unique().tolist()}")
 
 def status_test(df1, df2, key_columns):
     #Esta funcion toma el df de la base RAW y el df de produccion y los columnas a comparar,
@@ -30,15 +55,20 @@ def status_test(df1, df2, key_columns):
     summary_status = df_merge.groupby("Hash_Match").size().reset_index(name="Total_Registros")
     summary_status["Fecha_Resumen"] = execution_date
     if not summary_status.empty:
-        export_to_raw( summary_status, "control_de_cambios", "append")
+        export_to_raw( summary_status, "control_de_cambios")
     return df_merge, summary_status
 
 def add_hash (df, columns):
     #Esta función toma un dataframe y una lista de columnas, 
     #crea una clave única concatenando las columnas, 
     #luego genera un hash de esa clave en una nueva columnas
-    df_key = df[columns].astype(str).agg("|".join, axis=1)
+    df_hash = df.copy()
+    df_hash = df_hash.astype("string")
+    df_hash = df_hash.dropna(how="all")
+    df_hash = df_hash.fillna("__NULL__")
+    df_key = df_hash[columns].agg("|".join, axis=1)
     df["Hash"] = df_key.apply(lambda x: hashlib.md5(x.encode()).hexdigest())
+    df["Fecha_Carga"] = execution_date
     return df
 
 def auditory(df, table_origin):
@@ -48,7 +78,7 @@ def auditory(df, table_origin):
         df_auditoria["Fecha_Auditoria"] = execution_date
         df_auditoria["Tabla_Origen"] = table_origin
         if not df_auditoria.empty:
-             export_to_raw(df_auditoria, "auditoria_de_cambios", "append")
+             export_to_raw(df_auditoria, "auditoria_de_cambios")
         return df_auditoria
 
 def get_new_records(df, df_source, table_name):
@@ -57,15 +87,18 @@ def get_new_records(df, df_source, table_name):
         data_new_add = df_new_add["RegistroID"].tolist()
         df_final = df_source 
         df_final = df_final[df_final["RegistroID"].isin(data_new_add)]
-        df_final["Fecha_Carga"] = execution_date
-        df_final["Tabla_Origen"] = table_name
         if not df_new_add.empty:
-             export_to_raw(df_final, table_name, "append")
+             export_to_raw(df_final, table_name)
         return df_final
 
 def get_source_excel(ruta):
     #Esta función toma una ruta de un archivo excel y devuelve un dataframe con los datos del excel
-    df = pd.read_excel(ruta)
+    df = pd.read_excel(ruta, dtype_backend='numpy_nullable')
+    return df
+
+def get_source_sql(table_name):
+    #Esta función toma el nombre de una tabla en la base RAW y devuelve un dataframe con los datos de esa tabla
+    df = pd.read_sql_table(table_name, con=engine)
     return df
 
 Sources = {
@@ -89,13 +122,19 @@ def process_source(source):
     #procesa los datos de cada fuente utilizando las funciones anteriores, devuelve un df resumen
     #carga los datos sin cambios o errores a raw y los datos con cambios o eliminados a la tabla de auditoria
     df_source = get_source_excel(source["ruta"])
-    df_source = df_source.where(pd.notnull(df_source), None)
-    df_source = add_hash(df_source, source["hash_columns"])
-    df_source_raw = pd.read_sql_table(source["table_name"], con=engine)
-    df_status, summary_status = status_test(df_source_raw, df_source, source["key_columns"])
-    df_auditoria = auditory(df_status, source["table_name"])
-    df_new_records = get_new_records(df_status, df_source, source["table_name"])
-    return summary_status
+    validate_source(df_source, source["hash_columns"])
+    validate_duplicated(df_source, source["key_columns"])
+    df_source = add_hash(df_source, source["hash_columns"])    
+    inspector = inspect(engine)
+    if inspector.has_table(source["table_name"]):
+        df_source_raw = get_source_sql(source["table_name"])
+        df_status, summary_status = status_test(df_source_raw, df_source, source["key_columns"])
+        auditory(df_status, source["table_name"])
+        get_new_records(df_status, df_source, source["table_name"])
+        return summary_status
+    else:
+        export_to_raw(df_source, source["table_name"])
+    
 
 def main():
 
@@ -107,5 +146,6 @@ def main():
 
     proceso_ventas = process_source(Sources["ventas"])
     
+
 if __name__ == "__main__":
     main()
