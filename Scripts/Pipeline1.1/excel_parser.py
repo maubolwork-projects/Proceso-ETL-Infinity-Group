@@ -139,7 +139,7 @@ def _clean_tail(df, tolerance=0.9, gap=3):
 # 2. Función Pública (Interfaz)
 #====================================
 
-def Excel_Parser(ruta, hoja, hash_columns, threshold=0.8, tolerance=0.5, gap=3):
+def excel_parser(ruta, hoja, hash_columns, threshold=0.8, tolerance=0.5, gap=3):
 # Funcion principal donde los insumos principales son la ruta, hoja y columnas principales
 # Regresa un DataFrame limpio, con estructura de tabla; eliminado encabezados al inicio
 # y resumenes o datos secundarios al final de la tabla.
