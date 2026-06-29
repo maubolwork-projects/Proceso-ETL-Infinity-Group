@@ -155,4 +155,4 @@ def Excel_Parser(ruta, hoja, hash_columns, threshold=0.8, tolerance=0.5, gap=3):
 
     return df
 
-__all__ = ['Excel_Parser']
+__all__ = ['excel_parser']
