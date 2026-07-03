@@ -1,6 +1,6 @@
 #excel_parser.py
 
-# Esta biblioteca tiene las funciones para convertir archivos Excel con formato libre
+# Esta biblioteca versión 1.2 tiene las funciones para convertir archivos Excel con formato libre
 # (logos, títulos, encabezados desplazados y resúmenes)
 # en una tabla estructurada lista para ser procesada por el pipeline de ingestión.
 
