@@ -20,13 +20,15 @@ def _get_source_excel(ruta, hoja):
     #además, elimina filas y columnas totalmente vacias
     df = pd.read_excel(ruta, sheet_name=hoja, header=None, dtype_backend='numpy_nullable')
     df = df.dropna(how='all').dropna(how='all', axis=1).copy()
+    df = df.reset_index(drop=True)
     return df
 
-def _clean_header(df, hash_columns, threshold=0.8):
-    #Esta funcion busca el encabezado de las columnas principales, elimina las filas
-    #que estan sobre esta columna y devuelve un df sin encabezado
-    start_row = None
+def _find_header_row(df, hash_columns, threshold=0.8):
+    #Esta funcion busca el encabezado donde se encuentran las columnas principales,
+    #y devuelve el indice donde se encuentra.
 
+    start_row = None
+    #Localiza en que fila se encuentran las columnas prinicipales
     for i, row in df.iterrows():
         row_values = row.dropna().astype(str).str.strip().tolist()
         matches = sum(1 for col in hash_columns if col in row_values)
@@ -34,15 +36,57 @@ def _clean_header(df, hash_columns, threshold=0.8):
         if pct >= threshold:
             start_row = i
             break
+    return start_row
 
+def _residual_cleaning_header(df):
+    #Esta función limpia el encabezado de la tabla una vez que se ha encontrado el encabezado principal,
+    #Elimina columnas <Nan> y <None> y coloca un índice si hay nombres duplicados
+
+    # Elimina columnas que se llamen 'nan' o tengan valores nulos en el nombre
+    df = df.loc[:, df.columns.notna()]
+    df = df.loc[:, df.columns != 'nan']
+    #Coloca un indice si por algun motivo sigue habiendo nombres duplicados en las columnas
+    cols = pd.Series(df.columns)
+    contador = cols.groupby(cols).cumcount()
+    df.columns = [f'{col}_{count + 1}' if count > 0 else col for col,  count in zip(cols, contador)]
+    return df
+
+def _has_duplicate_headers(headers):
+    #Esta función valida que los encabezados no sean vacíoso nulos, detecta si hay duplicados
+    #y devuelve...
+    headers_validos = [str(h).strip() for h in headers if str(h).strip() != "" and str(h).lower() != "nan" and str(h) != "none"]
+    duplicated = len(headers_validos) != len(set(headers_validos))
+    return duplicated
+        
+def _clean_header(df, hash_columns, threshold=0.8):
+    #Esta funcion busca el encabezado de las columnas principales, elimina las filas
+    #que estan sobre esta columna y devuelve un df sin encabezado
+
+    start_row = _find_header_row(df, hash_columns, threshold)
+
+    #Si encuentra el encabezado elimina las filas superiores a este y lo devuelve limpio
     if start_row is not None:
-        new_headers = df.iloc[start_row].tolist()
-        df_clean = df.iloc[start_row + 1:].copy()
-        df_clean.columns = new_headers
-        df_clean.reset_index(drop=True, inplace=True)
+        new_headers = df.loc[start_row].astype(str).str.strip().tolist()
+        #Si hay columnas con headers duplicados, llama a _header_combination
+        has_duplicated = _has_duplicate_headers(new_headers)
+        if has_duplicated:
+            df_clean = _header_combination(df, start_row)
+        else:
+            df_clean = df.loc[start_row + 1:].copy()
+            df_clean.columns = new_headers
+            df_clean.reset_index(drop=True, inplace=True)
+            # Elimina columnas que se llamen 'nan' o tengan valores nulos en el nombre y pone un ínidice si hay nombres duplicados
+            df_clean = _residual_cleaning_header(df_clean)
+
         return df_clean
     
     return None
+
+def _is_in_tolerance(wide,base_wide, tolerance):
+    #Esta funcion verifica si el ancho o meseta de datos está dentro del rango de tolerancia
+    lower_bound = base_wide * tolerance
+    upper_bound = base_wide * (1 + (1 - tolerance))
+    return lower_bound <= wide <= upper_bound
 
 def _find_first_datarow(df, tolerance=0.9, gap=3):
     #Esta funcion calcula la longitud del contenido de cada fila (sin vacios), con ello compara
@@ -61,8 +105,7 @@ def _find_first_datarow(df, tolerance=0.9, gap=3):
         next_gap = count_row[idex + 1 : idex + 1 + gap]
 
         is_estable = all(
-            (wide >= actual_wide * tolerance) and 
-            (wide <= actual_wide * (1 + (1 - tolerance)))
+            _is_in_tolerance(wide, actual_wide, tolerance)
         for wide in next_gap
         )
         if is_estable:
@@ -85,8 +128,7 @@ def _find_last_datarow(df, start_index, tolerance=0.9, gap=3):
         actual_wide = count_row[idex]
 
         is_part_table = (
-            (actual_wide >= expected_wide * tolerance) and
-            (actual_wide <= expected_wide * (1 + (1 - tolerance)))
+            _is_in_tolerance(actual_wide, expected_wide, tolerance)
         )
 
         if is_part_table:
@@ -95,7 +137,7 @@ def _find_last_datarow(df, start_index, tolerance=0.9, gap=3):
         else:
             next_gap = count_row[idex : idex + gap]
             still_broken = all(
-                not ((wide >= expected_wide * tolerance) and (wide <= expected_wide * (1 + (1 - tolerance))))
+                not (_is_in_tolerance(wide, expected_wide, tolerance))
                 for wide in next_gap
             )
             if still_broken:
@@ -103,15 +145,18 @@ def _find_last_datarow(df, start_index, tolerance=0.9, gap=3):
             
     return total_rows
 
-def _header_combination(df, tolerance=0.9, gap=3):
+def _header_combination(df, start_row=None, tolerance=0.9, gap=3):
+    
     # Esta función calcula el inidice donde comienzan los datos utilizando la función Find_first_DataRow,
     # Rellena las celdas vacias con "_" y concatena todos los valores de las celdas que esten por encima de los datos
     # crea un nuevo header para las columnas con la informacion calculado para en una etapa posterior limpiarla 
     # sin perder inofrmacion de origen
+    if start_row is not None:
+        indice = start_row + 1
+    else:
+        indice = _find_first_datarow(df, tolerance, gap)
 
-    indice = _find_first_datarow(df, tolerance, gap)
-
-    df_headers = df.iloc[:indice].fillna("_")
+    df_headers = df.iloc[:indice].astype(str).fillna("_")
     new_headers = []
     for col in df_headers.columns:
         pieces = [str(val).strip() for val in df_headers[col]]
@@ -121,18 +166,22 @@ def _header_combination(df, tolerance=0.9, gap=3):
                 clean_pieces.append(val)
 
         name_column = ">".join(clean_pieces) if clean_pieces else f"Columna_{col}"
-        new_headers.append(name_column) 
+        new_headers.append(name_column)
+
     df = df.iloc[indice :].copy()
     df.columns = new_headers
     df.reset_index(drop=True, inplace=True)
+    # Elimina columnas que se llamen 'nan' o tengan valores nulos en el nombre y ponen un ínidce a nombres duplicados
+    df = _residual_cleaning_header(df)
+    
     return df
 
-def _clean_tail(df, tolerance=0.9, gap=3):
+
+def _clean_tail(df, tolerance=0.95, gap=3):
     #Esta funcion limpia el final de una tabla donde puede haber resumenes o datos dispersos
     f_index = _find_first_datarow(df, tolerance, gap)
     l_index = _find_last_datarow(df, f_index, tolerance, gap)
     df = df.iloc[:l_index].copy()
-
     return df
 
 #====================================
@@ -144,15 +193,15 @@ def excel_parser(ruta, hoja, hash_columns, threshold=0.8, tolerance=0.5, gap=3):
 # Regresa un DataFrame limpio, con estructura de tabla; eliminado encabezados al inicio
 # y resumenes o datos secundarios al final de la tabla.
     df = _get_source_excel(ruta, hoja)
-    df1 = df.copy()
-    df1 = _clean_header(df1, hash_columns, threshold)
-    if df1 is not None:
-        df1 = _clean_tail(df1, tolerance, gap)
-        return df1
+    df_to_clean = df.copy()
+    df_to_clean = _clean_header(df_to_clean, hash_columns, threshold)
+    if df_to_clean is not None:
+        df_to_clean = _clean_tail(df_to_clean, tolerance, gap)
+        return df_to_clean
     else:
-        df = _header_combination(df, tolerance, gap)
-        df = _clean_tail(df, tolerance, gap)
+        df_to_combinate = _header_combination(df, tolerance, gap)
+        df_to_combinate = _clean_tail(df_to_combinate, tolerance, gap)
 
-    return df
+    return df_to_combinate
 
 __all__ = ['excel_parser']
