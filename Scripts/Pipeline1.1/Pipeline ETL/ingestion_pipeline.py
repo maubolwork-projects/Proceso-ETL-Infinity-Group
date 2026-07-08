@@ -1,4 +1,4 @@
-#Pipeline_ETL_con_extraccion_de_cambios.py
+#ingestion_pipeline.py
 
 #Versión 1.0 del código que pretende ser un proceso ETL el cual extrae datos 
 #de diferentes fuentes (en este caso Excel): comprueba la validez del archivo (vacio, faltantes, duplicados) y,
@@ -19,6 +19,9 @@
 
 #Versión 1.4.1 Se modificó la funcion _auditory para que reportara los siguientes datos "Tabla_Origen", "Renglon_Cambio", "Hash_Match",
 #  "Fecha_Auditoria". ya que antoriormente tomamba la fila completa y eso causaba error debido a los diferentes formatos de las tablas
+
+#Versión 1.5 Se sustituyo el método de ejecución de la función process_source en la funcion __main__ por un ciclo for y un if que 
+# evaluan y comparan la función para cada registro en sources.
 
 #====================================
 # Importacion De Bibliotecas
@@ -146,7 +149,7 @@ def _get_source_sql(table_name):
 
 def process_source(source):
     #Esta funcion toma de un diccionario la informacion con cada fuente de informacion
-    #procesa los datos de cada fuente utilizando las funciones anteriores, devuelve un df resumen
+    #procesa los datos de cada fuente utilizando las funciones privadas, devuelve un df resumen
     #carga los datos sin cambios o errores a raw y los datos con cambios o eliminados a la tabla de auditoria
 
     #Parte 1. Extracción y formato de la fuente de datos
@@ -175,51 +178,24 @@ def process_source(source):
     #Parte 6. Si no existe la tabla en RAW, se carga completa 
         _export_to_raw(df_source, source["table_name"])
     
-
 def main():
+    # Función principal del pipeline de ingestión.
 
-    #Esta es la función principal que ejecuta el proceso ETL para cada fuente de información almacenada en Sources
-    #En este ejemplo extrae los datos de dos fuentes de excel (ventas y producción), agrega un hash unico para cada
-    #registro; a partrir de ahí compara los datos almacenados en la base de datos RAW y los extraidos de las otras 
-    #fuentes; detecta cambios, nuevos registros y eliminados, almacena los datos nuevos en una tabla de la base RAW
-    #los cambios en una tabla de auditoria y un resumen con la cantidad de estados detectados en otra tabla.
+    # Recorre todas las fuentes definidas en SOURCES y ejecuta el proceso ETL para cada una de ellas. El proceso incluye:
+    # 1. Extracción y normalización del archivo Excel mediante excel_parser.
+    # 2. Validación de estructura, columnas obligatorias y registros duplicados.
+    # 3. Resolución automática de cambios en los encabezados (hash schema).
+    # 4. Generación del hash de seguimiento para cada registro.
+    # 5. Comparación contra la capa RAW.
+    # 6. Detección de nuevos registros, cambios y eliminaciones.
+    # 7. Registro de auditoría y control de cambios.
+    # 8. Carga incremental de nuevos registros a PostgreSQL.
     Sources = SOURCES
-    proceso_remisiones = process_source(Sources["Remisiones"])
-    proceso_Ingresos = process_source(Sources["Ingresos"])
-    proceso_Egresos = process_source(Sources["Egresos"])
-    proceso_Flujo = process_source(Sources["Flujo efectivo"])
-
-    #Archivo Entradas Norte
-    proceso_ent_cem_nte = process_source(Sources["Ent_Cem_Nte"])
-    proceso_ent_adit_nte = process_source(Sources["Ent_Aditivos_Nte"])
-    proceso_ent_agua_nte = process_source(Sources["Ent_Agua_Nte"])
-    proceso_ent_at_nte = process_source(Sources["Ent_AT_Nte"])
-    proceso_ent_av_nte = process_source(Sources["Ent_AV_Nte"])
-    proceso_ent_g20_nte = process_source(Sources["Ent_G20_Nte"])
-    #proceso_ent_g20t_nte = process_source(Sources["Ent_G20T_Nte"])  Tiene un dato duplicado se pidio retroalimentacion
-    proceso_ent_g40_nte = process_source(Sources["Ent_G40_Nte"])
-    
-    #Archivo Entradas Sur
-    proceso_ent_cem_sur = process_source(Sources["Ent_Cem_Sur"])
-    proceso_ent_adit_sur = process_source(Sources["Ent_Aditivos_Sur"])
-#    proceso_ent_agua_sur = process_source(Sources["Ent_Agua_Sur"])     espacios vacios en la columna remisiones(id) leidos como duplicados
-    proceso_ent_at_sur = process_source(Sources["Ent_AT_Sur"])
-    proceso_ent_av_sur = process_source(Sources["Ent_AV_Sur"])
-    proceso_ent_g20_sur = process_source(Sources["Ent_G20_Sur"])
-    proceso_ent_g20t_sur = process_source(Sources["Ent_G20T_Sur"])  
-    proceso_ent_g40_sur = process_source(Sources["Ent_G40_Sur"])
-
-    #Archivo Salidas Norte
-    proceso_ent_salidas_nte = process_source(Sources["Salidas_Norte"])
-
-    #Archivo Salidas Norte
-#    proceso_ent_salidas_sur = process_source(Sources["Salidas_Sur"])     Espacio en blanco en la columna remisiones(id) leidos como duplicados
-    
-    #Archivo Consumos Arkik
-    proceso_ent_consumos_arkik = process_source(Sources["Consumos_Arkik"])  #Caso especial, se tiene que combinar dos filas del header
-
-    #Archivo Cierre_Arkik
-    proceso_ent_consumos_arkik = process_source(Sources["Cierre_Arkik"])    #Caso especial, se combinaron nombres del header y se modificó el hash
+    for source_name, source in Sources.items():
+         if not source.get("enabled", True):
+              print(f"Fuente no conciderada: {source_name}\nMotivo: {source.get("coment")}\n")
+              continue
+         process_source(source)
 
 if __name__ == "__main__":
     main()
