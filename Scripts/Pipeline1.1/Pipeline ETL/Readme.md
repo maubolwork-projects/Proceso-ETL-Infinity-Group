@@ -133,7 +133,7 @@ Cada fuente define:
 * Tabla destino.
 * Columnas Hash.
 * Llaves de comparación.
-* Columna identificadora.
+* Estatus
 
 ---
 
