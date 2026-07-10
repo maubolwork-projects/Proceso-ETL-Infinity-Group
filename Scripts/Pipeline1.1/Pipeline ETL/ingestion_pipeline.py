@@ -155,12 +155,12 @@ def process_source(source):
     #Parte 1. Extracción y formato de la fuente de datos
     df_source = excel_parser(source["ruta"], source["sheet_name"], source["hash_columns"])
 
-    #Parte 2. Validación de la fuente de datos
-    _validate_source(df_source, source["hash_columns"])
-    _validate_duplicated(df_source, source["key_columns"])
-
-    #Parte 3. Si es necesario se reconfigura el sistema de key columns y generación de hash
+    #Parte 2. Si es necesario se reconfigura el sistema de key columns y generación de hash
     source = resolve_hash_schema(df_source, source["hash_columns"], source["key_columns"], source)
+
+    #Parte 3. Validación de la fuente de datos
+    _validate_source(df_source, source["hash_columns"], source["table_name"])
+    _validate_duplicated(df_source, source["key_columns"])
     
     #Parte 4. Se agrega el hash de seguimiento de cambios
     df_source = _add_hash(df_source, source["hash_columns"])
