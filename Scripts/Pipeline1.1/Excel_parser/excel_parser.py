@@ -1,6 +1,6 @@
 #excel_parser.py
 
-# Esta biblioteca versión 1.2 tiene las funciones para convertir archivos Excel con formato libre
+# Esta biblioteca versión 1.3 tiene las funciones para convertir archivos Excel con formato libre
 # (logos, títulos, encabezados desplazados y resúmenes)
 # en una tabla estructurada lista para ser procesada por el pipeline de ingestión.
 
@@ -38,17 +38,73 @@ def _find_header_row(df, hash_columns, threshold=0.8):
             break
     return start_row
 
-def _residual_cleaning_header(df):
-    #Esta función limpia el encabezado de la tabla una vez que se ha encontrado el encabezado principal,
-    #Elimina columnas <Nan> y <None> y coloca un índice si hay nombres duplicados
+def _assign_headers(headers):
+    #Esta función construye los headers cuando estan dispersos en varios renglones, también
+    #elimina aquellas columnas que pudieran quedar residuales o con datos nulos
+    new_headers = []
+    for col in headers.columns:
+        pieces = [str(val).strip() for val in headers[col]]
+        clean_pieces = []
+        for val in pieces:
+            if val != "_" and (not clean_pieces or val != clean_pieces[-1]):
+                clean_pieces.append(val)
 
-    # Elimina columnas que se llamen 'nan' o tengan valores nulos en el nombre
-    df = df.loc[:, df.columns.notna()]
-    df = df.loc[:, df.columns != 'nan']
-    #Coloca un indice si por algun motivo sigue habiendo nombres duplicados en las columnas
+        empty_header = headers[col].iloc[-1] == "_"
+        if clean_pieces:
+            if empty_header:
+                name_column = f"Columna_{col}>" + ">".join(clean_pieces)
+            else:
+                name_column = ">".join(clean_pieces)
+        else:
+            name_column = f"Columna_{col}"
+        new_headers.append(name_column)
+        
+    return new_headers
+
+def _clean_garbage_columns(df):
+    #Esta función elimina las columnas residuales creadas al concatenar los headers de las columnas
+    empty_values = ["_", "", "<NA>", "NaT", None, pd.NA]
+    garbage_columns = [col for col in df.columns
+    if str(col).startswith("Columna_") and df[col].isin(empty_values).all() | df[col].isna().all()]
+    print(garbage_columns)
+    df = df.drop(columns=garbage_columns)
+    return df
+
+def _assign_index_to_duplicate_columns(df):
+    #Si existen nombres de columnas duplicados esta función les asigna un índice para diferenciarlas 
+    # y tener una carga correcta a PostgreSQL
     cols = pd.Series(df.columns)
     contador = cols.groupby(cols).cumcount()
     df.columns = [f'{col}_{count + 1}' if count > 0 else col for col,  count in zip(cols, contador)]
+    return df
+
+def _remove_header_prefix(df):
+    #Esta función elimina el prefijo "Columna_[número]>" asignado al construir el header cuando este no existe
+    clean_columns = []
+
+    for col in df.columns:
+        col_str = str(col)
+        if col_str.startswith("Columna_") and ">" in col_str:
+            clean_columns.append(col_str.split(">", 1)[-1])
+        else:
+            clean_columns.append(col)
+    
+    df.columns = clean_columns
+    return df
+
+
+def _residual_cleaning_columns(df):
+    #Esta función limpia el encabezado de la tabla una vez que se ha encontrado el encabezado principal,
+    #Elimina columnas <Nan> y <None> y coloca un índice si hay nombres duplicados
+    #Además elimina las columnas que se agregaron por algún dato residual al final del archivo
+    df = _clean_garbage_columns(df)
+    # Elimina columnas que se llamen 'nan' o tengan valores nulos en el nombre
+    df = df.loc[:, df.columns.notna()]
+    df = df.loc[:, df.columns != 'nan']
+    #Elimina prefijos temporales de asignación de los headers
+    df = _remove_header_prefix(df)
+    #Coloca un indice si por algun motivo sigue habiendo nombres duplicados en las columnas
+    df = _assign_index_to_duplicate_columns(df)
     return df
 
 def _has_duplicate_headers(headers):
@@ -63,21 +119,24 @@ def _clean_header(df, hash_columns, threshold=0.8):
     #que estan sobre esta columna y devuelve un df sin encabezado
 
     start_row = _find_header_row(df, hash_columns, threshold)
-
+    
     #Si encuentra el encabezado elimina las filas superiores a este y lo devuelve limpio
     if start_row is not None:
         new_headers = df.loc[start_row].astype(str).str.strip().tolist()
+
         #Si hay columnas con headers duplicados, llama a _header_combination
         has_duplicated = _has_duplicate_headers(new_headers)
+
         if has_duplicated:
-            df_clean = _header_combination(df, start_row)
+            df_clean = _header_combination(df, start_row=start_row)
+            
         else:
             df_clean = df.loc[start_row + 1:].copy()
             df_clean.columns = new_headers
             df_clean.reset_index(drop=True, inplace=True)
             # Elimina columnas que se llamen 'nan' o tengan valores nulos en el nombre y pone un ínidice si hay nombres duplicados
-            df_clean = _residual_cleaning_header(df_clean)
-
+            df_clean = _residual_cleaning_columns(df_clean)
+        
         return df_clean
     
     return None
@@ -145,34 +204,28 @@ def _find_last_datarow(df, start_index, tolerance=0.9, gap=3):
             
     return total_rows
 
-def _header_combination(df, start_row=None, tolerance=0.9, gap=3):
+def _header_combination(df, tolerance=0.9, gap=3, start_row=None):
     
     # Esta función calcula el inidice donde comienzan los datos utilizando la función Find_first_DataRow,
     # Rellena las celdas vacias con "_" y concatena todos los valores de las celdas que esten por encima de los datos
     # crea un nuevo header para las columnas con la informacion calculado para en una etapa posterior limpiarla 
     # sin perder inofrmacion de origen
+
     if start_row is not None:
         indice = start_row + 1
+
     else:
         indice = _find_first_datarow(df, tolerance, gap)
 
     df_headers = df.iloc[:indice].astype(str).fillna("_")
-    new_headers = []
-    for col in df_headers.columns:
-        pieces = [str(val).strip() for val in df_headers[col]]
-        clean_pieces = []
-        for val in pieces:
-            if val != "_" and (not clean_pieces or val != clean_pieces[-1]):
-                clean_pieces.append(val)
-
-        name_column = ">".join(clean_pieces) if clean_pieces else f"Columna_{col}"
-        new_headers.append(name_column)
+    
+    new_headers = _assign_headers(df_headers)
 
     df = df.iloc[indice :].copy()
     df.columns = new_headers
     df.reset_index(drop=True, inplace=True)
     # Elimina columnas que se llamen 'nan' o tengan valores nulos en el nombre y ponen un ínidce a nombres duplicados
-    df = _residual_cleaning_header(df)
+    df = _residual_cleaning_columns(df)
     
     return df
 
@@ -197,11 +250,14 @@ def excel_parser(ruta, hoja, hash_columns, threshold=0.8, tolerance=0.5, gap=3):
     df_to_clean = _clean_header(df_to_clean, hash_columns, threshold)
     if df_to_clean is not None:
         df_to_clean = _clean_tail(df_to_clean, tolerance, gap)
+        df_to_clean = _residual_cleaning_columns(df_to_clean)
+        print(df_to_clean.head())
         return df_to_clean
     else:
         df_to_combinate = _header_combination(df, tolerance, gap)
         df_to_combinate = _clean_tail(df_to_combinate, tolerance, gap)
-
+        df_to_combinate = _residual_cleaning_columns(df_to_combinate)
+        print(df_to_combinate.head())
     return df_to_combinate
 
 __all__ = ['excel_parser']
