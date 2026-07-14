@@ -66,7 +66,6 @@ def _clean_garbage_columns(df):
     empty_values = ["_", "", "<NA>", "NaT", None, pd.NA]
     garbage_columns = [col for col in df.columns
     if str(col).startswith("Columna_") and df[col].isin(empty_values).all() | df[col].isna().all()]
-    print(garbage_columns)
     df = df.drop(columns=garbage_columns)
     return df
 
@@ -251,13 +250,11 @@ def excel_parser(ruta, hoja, hash_columns, threshold=0.8, tolerance=0.5, gap=3):
     if df_to_clean is not None:
         df_to_clean = _clean_tail(df_to_clean, tolerance, gap)
         df_to_clean = _residual_cleaning_columns(df_to_clean)
-        print(df_to_clean.head())
         return df_to_clean
     else:
         df_to_combinate = _header_combination(df, tolerance, gap)
         df_to_combinate = _clean_tail(df_to_combinate, tolerance, gap)
         df_to_combinate = _residual_cleaning_columns(df_to_combinate)
-        print(df_to_combinate.head())
     return df_to_combinate
 
 __all__ = ['excel_parser']
