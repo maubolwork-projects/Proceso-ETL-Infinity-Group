@@ -1,6 +1,6 @@
 #excel_parser.py
 
-# Esta biblioteca versión 1.4 tiene las funciones para convertir archivos Excel con formato libre
+# Esta biblioteca versión 1.5 tiene las funciones para convertir archivos Excel con formato libre
 # (logos, títulos, encabezados desplazados y resúmenes)
 # en una tabla estructurada lista para ser procesada por el pipeline de ingestión.
 
@@ -23,10 +23,6 @@ def _get_source_excel(ruta, hoja):
     df = df.dropna(how='all').dropna(how='all', axis=1).copy()
     df = df.reset_index(drop=True)
     return df
-
-def _expanded_headers():
-    return None
-
 
 def _find_header_row(df, hash_columns, threshold=0.8):
     #Esta funcion busca el encabezado donde se encuentran las columnas principales,
@@ -105,12 +101,25 @@ def _remove_header_prefix(df):
     return df
 
 def _cut_headers(df):
-    #Esta función recorta los headers cuando son demasiado largos y toma solo las dos cadenas unidas
-    #  por ">", ejemplo: material>cemento
-    patron = r'([^>]+(?:\s*>\s*)[^>]+(?:\s*>\s*)[^>]+)$'
-    series_columns = df.columns.to_series().reset_index(drop=True)
-    cutting_headers = series_columns.astype(str).str.extract(patron, expand=False).fillna(series_columns)
-    df.columns = cutting_headers.values
+    #Esta función recorta los headers cuando son demasiado largos y toma tres cadenas unidas
+    #  por ">", si la cadena es mayor a 63 caracteres, solo toma dos.
+
+    #patrones de elección
+    patron_3 = r'([^>]+(?:\s*>\s*)[^>]+(?:\s*>\s*)[^>]+)$'
+    patron_2 = r'([^>]+(?:\s*>\s*)[^>]+)$'
+
+    series_columns = df.columns.to_series().reset_index(drop=True).astype(str)
+    headers_3 = series_columns.astype(str).str.extract(patron_3, expand=False).fillna(series_columns)
+
+    final_headers = []
+    for i, col in enumerate(headers_3):
+        if len(col) > 63:
+            original_col = series_columns.iloc[i]
+            headers_2 = (pd.Series([original_col]).str.extract(patron_2, expand=False).fillna(original_col).str.strip().iloc[0])
+            final_headers.append(headers_2)
+        else:
+            final_headers.append(col)
+    df.columns = final_headers
     return df
 
 def _residual_cleaning_columns(df):
