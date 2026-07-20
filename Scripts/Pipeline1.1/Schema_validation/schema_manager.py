@@ -131,20 +131,19 @@ def schema_manager(df_source, df_raw, table_name, engine):
 
     # 4. Detecta las columnas desalineadas en ambas fuentes DF y RAW, esto quiere decir,
     # son iguales pero los nombres no coinciden en niveles del header menos significativos
-    ma_df, ma_raw = _misaligned_name_columns(df_enriched, df_raw)
+    misaligned_df, misaligned_raw = _misaligned_name_columns(df_enriched, df_raw)
 
-    if ma_df and ma_raw:
+    if misaligned_df and misaligned_raw:
         # 5. Normaliza los headers de las columnas desalineadas en DF encuentra los nombres 
         # equivalentes en RAW
-        norm_ma_df = _normalize_schema_headers(df_enriched.loc[:, ma_df]).columns.tolist()
+        norm_ma_df = _normalize_schema_headers(df_enriched.loc[:, misaligned_df]).columns.tolist()
         raw_equivalent_headers = _recover_original_headers(df_raw, norm_ma_df)
 
         # 6. Crea un diccionario que empareja los headers coinicidentes completos entre el DF y RAW
-        eq_dict = _substitution_dict(ma_df, raw_equivalent_headers, norm_ma_df)
+        eq_dict = _substitution_dict(misaligned_df, raw_equivalent_headers, norm_ma_df)
 
         # 7. Cambia el nombre de las colummas desalineadas del DF por el nombre que tienen en RAW
         df_enriched = _rename_df_columns(df_enriched, eq_dict)
-        print(df_enriched.columns.copy())
         return df_enriched
     else:
         return df_enriched
