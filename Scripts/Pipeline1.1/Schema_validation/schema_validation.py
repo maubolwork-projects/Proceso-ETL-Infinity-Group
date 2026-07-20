@@ -1,13 +1,16 @@
-# schema_validation.py
+# schema_manager.py
 
 """ Esta librería contiene funciones que ayudan a alinear las estructuras de las tablas entre las fuentes
     y las existentes en la base RAW, para en un proceso posterior poder cargarlas a RAW sin desfases.
+    V 1.2, Se agregan funciones para alinear las columnas con algun cambio en el header.
+    Soluciona 3 problemas: Schema evolution (columnas nuevas), Schema alignment (columnas faltantes),
+    Schema drift resolution (cambios en nombres).
 """
 
 #====================================
 # 1. Funciones Privadas (Uso Interno)
 #====================================
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 import pandas as pd
 
 def _normalize_schema_headers(df):
@@ -59,23 +62,91 @@ def _align_dataframe_schema(df, raw_headers):
             df_copy[col] = pd.Series(pd.NA, index=df_copy.index, dtype="string")
     return df_copy
 
+def _misaligned_name_columns(df_enriched, df_raw):
+    #Compara el nombre de las columnas de la fuente contra las registradas en la base RAW.
+    #Primero corta la cadena hasta las últimas dos cadenas que construyen el header despues,
+    #las agrupa en conjuntos y se obtienen las columnas extra en la nueva fuente.
+    
+    name_headers_source = set(df_enriched.columns)
+    
+    name_headers_raw = set(df_raw.columns)
+    misaligned_excel = list(name_headers_source - name_headers_raw)
+    misaligned_raw = list(name_headers_raw - name_headers_source)
+    return misaligned_excel, misaligned_raw
+
+def _substitution_dict(columns_df, columns_raw, patterns):
+    # Esta función construye un diccionario que relaciona las columnas desalineadas del DF y de RAW
+    # utilizando un conjunto de patrones normalizados con las dos últimas partes de la cadena que
+    # conforma el header (string2>string1), las cuales son más significativas
+    automatic_dict = {}
+    clean_patterns = [str(p).strip().lower() for p in patterns]
+
+    indice ={}
+    for col in columns_raw:
+            clean_col_raw = str(col).strip().lower()
+            for pattern in clean_patterns:
+                if clean_col_raw.endswith(pattern):
+                    indice[pattern] = col
+                    break
+
+    for col in columns_df:
+            clean_col_df = str(col).strip().lower()
+            for pattern in clean_patterns:
+                if clean_col_df.endswith(pattern):
+                    if pattern in indice:
+                        automatic_dict[col] = indice[pattern]
+                        break
+
+    return automatic_dict
+
+def _rename_df_columns(df, sub_dict):
+    #Esta función reemplaza los nombres de las columnas del dataframe que coinciden en sus 
+    # dos últimos bloques (string1 > string2) con la tabla en RAW para tener una carga uniforme
+
+    df_copy = df.copy()
+    df_copy = df_copy.drop(columns=sub_dict.values(), errors="ignore")
+    df_copy = df_copy.rename(columns=sub_dict)
+
+    return df_copy
+
 #====================================
 # 2. Función Pública (Interfaz)
 #====================================
 
-def schema_validation(df_source, df_raw, table_name, engine):
+def schema_manager(df_source, df_raw, table_name, engine):
     #Esta función detecta si hay columnas nuevas en el df proveniente de Excel, si las hay las agrega
     #  a la base RAW, importa las columnas faltantes que existen en RAW y devuelve un DF enriquecido
     # para su posterior carga a RAW
     df_enriched = df_source.copy()
-    extra_columns, extra_raw = _extra_columns(df_source, df_raw)
-    if extra_columns:
-        original_headers = _recover_original_headers(df_source, extra_columns)
+    # 1. Detecta si existen columnas extra en el DF nuevo y en la base RAW
+    unmatched_columns, unmatched_raw = _extra_columns(df_enriched, df_raw)
+    # 2. Si existen nuevas columnas en el DF las carga a RAW
+    if unmatched_columns:
+        original_headers = _recover_original_headers(df_enriched, unmatched_columns)
         _create_new_raw_columns(original_headers, table_name, engine)
-    if extra_raw:
-        original_raw = _recover_original_headers(df_raw, extra_raw)
-        df_enriched = _align_dataframe_schema(df_source, original_raw)
-        
-    return df_enriched
+    # 3. Si existen columnas adicionales en RAW las agrega al DF 
+    if unmatched_raw:
+        original_raw = _recover_original_headers(df_raw, unmatched_raw)
+        df_enriched = _align_dataframe_schema(df_enriched, original_raw)
 
-__all__ = ['schema_validation']
+    # 4. Detecta las columnas desalineadas en ambas fuentes DF y RAW, esto quiere decir,
+    # son iguales pero los nombres no coinciden en niveles del header menos significativos
+    ma_df, ma_raw = _misaligned_name_columns(df_enriched, df_raw)
+
+    if ma_df and ma_raw:
+        # 5. Normaliza los headers de las columnas desalineadas en DF encuentra los nombres 
+        # equivalentes en RAW
+        norm_ma_df = _normalize_schema_headers(df_enriched.loc[:, ma_df]).columns.tolist()
+        raw_equivalent_headers = _recover_original_headers(df_raw, norm_ma_df)
+
+        # 6. Crea un diccionario que empareja los headers coinicidentes completos entre el DF y RAW
+        eq_dict = _substitution_dict(ma_df, raw_equivalent_headers, norm_ma_df)
+
+        # 7. Cambia el nombre de las colummas desalineadas del DF por el nombre que tienen en RAW
+        df_enriched = _rename_df_columns(df_enriched, eq_dict)
+        print(df_enriched.columns.copy())
+        return df_enriched
+    else:
+        return df_enriched
+
+__all__ = ['schema_manager']
