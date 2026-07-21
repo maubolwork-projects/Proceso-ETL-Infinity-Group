@@ -213,12 +213,13 @@ Versión actual: **1.6**
 
 ## Próximas etapas
 
-* Construcción de la capa Staging.
-* Normalización mediante SQL.
-* Construcción del Data Warehouse.
-* Automatización de ejecuciones.
-* Orquestación del pipeline.
-* Incorporación de pruebas automatizadas.
+* Arquitectura completamente modular.
+* Configuración mediante archivos YAML/JSON.
+* Procesamiento concurrente.
+* Validaciones configurables.
+* Registro estructurado (logging).
+* Pruebas unitarias.
+* Adaptación para procesos ELT.
 
 ---
 
