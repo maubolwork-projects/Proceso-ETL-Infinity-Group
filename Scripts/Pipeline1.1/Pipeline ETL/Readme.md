@@ -42,7 +42,7 @@ El pipeline fue diseñado para operar en un entorno donde la información provie
 - Corrección automática de cambios en encabezados (Schema Drift Resolution).
 
 # Arquitectura General
-
+```text
 Excel
      │
      ▼
@@ -71,6 +71,7 @@ RAW PostgreSQL
      │
      ├── Auditoría
      └── Control de Cambios
+```
 ---
 
 # Funcionalidades
